@@ -1,0 +1,26 @@
+version: '3.9'
+
+services:
+  web:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      - DB_NAME=forgeos
+      - DB_USER=forgeos
+      - DB_PASSWORD=forgeos
+      - DB_HOST=db
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: forgeos
+      POSTGRES_USER: forgeos
+      POSTGRES_PASSWORD: forgeos
+    ports:
+      - "5432:5432"

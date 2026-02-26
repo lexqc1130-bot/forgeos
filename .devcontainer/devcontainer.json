@@ -1,0 +1,9 @@
+{
+  "name": "ForgeOS Dev",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "web",
+  "workspaceFolder": "/app",
+  "extensions": [
+    "ms-python.python"
+  ]
+}

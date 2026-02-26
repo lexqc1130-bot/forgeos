@@ -2,68 +2,112 @@
 
 COMMAND=$1
 
+function start() {
+  echo "🚀 Starting ForgeOS..."
+  docker compose up -d
+}
+
+function stop() {
+  echo "🛑 Stopping ForgeOS..."
+  docker compose down
+}
+
+function restart() {
+  echo "🔄 Restarting ForgeOS..."
+  docker compose down
+  docker compose up -d
+}
+
+function rebuild() {
+  echo "🏗 Rebuilding containers..."
+  docker compose down
+  docker compose build --no-cache
+  docker compose up -d
+}
+
+function logs() {
+  docker compose logs -f
+}
+
+function migrate() {
+  docker compose exec web python manage.py migrate
+}
+
+function bash_shell() {
+  docker compose exec web bash
+}
+
+function pull_latest() {
+  echo "⬇ Pulling latest changes..."
+  git pull
+}
+
+function push_changes() {
+  MESSAGE=$2
+  if [ -z "$MESSAGE" ]; then
+    echo "❗ Please provide commit message"
+    exit 1
+  fi
+  git add .
+  git commit -m "$MESSAGE"
+  git push
+}
+
+function sync_all() {
+  echo "🔄 Syncing project..."
+  git pull
+  docker compose down
+  docker compose up -d
+}
+
+function clean() {
+  echo "🧹 Cleaning Docker..."
+  docker compose down
+  docker system prune -f
+}
+
+function reset_db() {
+  echo "⚠ Resetting database..."
+  docker compose down
+  docker volume rm forgeos_db_data 2>/dev/null
+  docker compose up -d
+}
+
+function status() {
+  git status
+}
+
 case $COMMAND in
-
-  up)
-    echo "🚀 Starting ForgeOS..."
-    docker compose up -d
-    ;;
-
-  down)
-    echo "🛑 Stopping ForgeOS..."
-    docker compose down
-    ;;
-
-  restart)
-    echo "🔄 Restarting ForgeOS..."
-    docker compose down
-    docker compose up -d
-    ;;
-
-  logs)
-    docker compose logs -f
-    ;;
-
-  migrate)
-    docker compose exec web python manage.py migrate
-    ;;
-
-  bash)
-    docker compose exec web bash
-    ;;
-
-  pull)
-    echo "⬇ Pulling latest changes..."
-    git pull
-    ;;
-
-  push)
-    MESSAGE=$2
-    if [ -z "$MESSAGE" ]; then
-      echo "❗ Please provide commit message"
-      exit 1
-    fi
-    git add .
-    git commit -m "$MESSAGE"
-    git push
-    ;;
-
-  status)
-    git status
-    ;;
-
+  up) start ;;
+  down) stop ;;
+  restart) restart ;;
+  rebuild) rebuild ;;
+  logs) logs ;;
+  migrate) migrate ;;
+  bash) bash_shell ;;
+  pull) pull_latest ;;
+  push) push_changes "$@" ;;
+  sync) sync_all ;;
+  clean) clean ;;
+  reset-db) reset_db ;;
+  status) status ;;
   *)
     echo ""
-    echo "ForgeOS Commands:"
-    echo "  ./dev up            - Start project"
-    echo "  ./dev down          - Stop project"
-    echo "  ./dev restart       - Restart project"
-    echo "  ./dev logs          - View logs"
-    echo "  ./dev migrate       - Run migrations"
-    echo "  ./dev bash          - Enter container"
-    echo "  ./dev pull          - Git pull"
-    echo "  ./dev push \"msg\"    - Git add/commit/push"
-    echo "  ./dev status        - Git status"
+    echo "ForgeOS Advanced CLI"
+    echo ""
+    echo "  ./dev up           - Start project"
+    echo "  ./dev down         - Stop project"
+    echo "  ./dev restart      - Restart project"
+    echo "  ./dev rebuild      - Full rebuild (no cache)"
+    echo "  ./dev logs         - View logs"
+    echo "  ./dev migrate      - Run migrations"
+    echo "  ./dev bash         - Enter container"
+    echo "  ./dev pull         - Git pull"
+    echo "  ./dev push \"msg\"   - Git add/commit/push"
+    echo "  ./dev sync         - Pull + restart"
+    echo "  ./dev clean        - Remove stopped containers"
+    echo "  ./dev reset-db     - Reset database"
+    echo "  ./dev status       - Git status"
     echo ""
     ;;
 esac

@@ -32,6 +32,11 @@ case $COMMAND in
     docker compose exec web bash
     ;;
 
+  pull)
+    echo "⬇ Pulling latest changes..."
+    git pull
+    ;;
+
   push)
     MESSAGE=$2
     if [ -z "$MESSAGE" ]; then
@@ -43,16 +48,22 @@ case $COMMAND in
     git push
     ;;
 
+  status)
+    git status
+    ;;
+
   *)
     echo ""
     echo "ForgeOS Commands:"
-    echo "  ./dev up        - Start project"
-    echo "  ./dev down      - Stop project"
-    echo "  ./dev restart   - Restart project"
-    echo "  ./dev logs      - View logs"
-    echo "  ./dev migrate   - Run migrations"
-    echo "  ./dev bash      - Enter container"
-    echo "  ./dev push \"msg\" - Git add/commit/push"
+    echo "  ./dev up            - Start project"
+    echo "  ./dev down          - Stop project"
+    echo "  ./dev restart       - Restart project"
+    echo "  ./dev logs          - View logs"
+    echo "  ./dev migrate       - Run migrations"
+    echo "  ./dev bash          - Enter container"
+    echo "  ./dev pull          - Git pull"
+    echo "  ./dev push \"msg\"    - Git add/commit/push"
+    echo "  ./dev status        - Git status"
     echo ""
     ;;
 esac

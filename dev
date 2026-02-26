@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+COMMAND=$1
+
+case $COMMAND in
+
+  up)
+    echo "🚀 Starting ForgeOS..."
+    docker compose up -d
+    ;;
+
+  down)
+    echo "🛑 Stopping ForgeOS..."
+    docker compose down
+    ;;
+
+  restart)
+    echo "🔄 Restarting ForgeOS..."
+    docker compose down
+    docker compose up -d
+    ;;
+
+  logs)
+    docker compose logs -f
+    ;;
+
+  migrate)
+    docker compose exec web python manage.py migrate
+    ;;
+
+  bash)
+    docker compose exec web bash
+    ;;
+
+  push)
+    MESSAGE=$2
+    if [ -z "$MESSAGE" ]; then
+      echo "❗ Please provide commit message"
+      exit 1
+    fi
+    git add .
+    git commit -m "$MESSAGE"
+    git push
+    ;;
+
+  *)
+    echo ""
+    echo "ForgeOS Commands:"
+    echo "  ./dev up        - Start project"
+    echo "  ./dev down      - Stop project"
+    echo "  ./dev restart   - Restart project"
+    echo "  ./dev logs      - View logs"
+    echo "  ./dev migrate   - Run migrations"
+    echo "  ./dev bash      - Enter container"
+    echo "  ./dev push \"msg\" - Git add/commit/push"
+    echo ""
+    ;;
+esac

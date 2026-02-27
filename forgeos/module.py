@@ -1,6 +1,8 @@
 from .lifecycle import ModuleLifecycle, ModuleState
 from .schema import ForgeModuleSchema
-
+import time
+from functools import wraps
+from forgeos.cost_tracker import record_event
 
 class ForgeModule:
 
@@ -41,3 +43,57 @@ class ForgeModule:
 
     def can_retry(self):
         return self.retry_count < self.max_retries
+    
+    name = "base_module"
+
+    def wrap_service(self, service_func):
+
+        @wraps(service_func)
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            error = None
+            result = None
+
+            try:
+                result = service_func(*args, **kwargs)
+                return result
+
+            except Exception as e:
+                error = str(e)
+                raise e
+
+            finally:
+                execution_time = time.time() - start_time
+
+                record_event(
+                    org_id=kwargs.get("org_id", "unknown_org"),
+                    module_name=self.name,
+                    event_type=service_func.__name__,
+                    token_used=kwargs.get("token_used", 0),
+                    execution_time=execution_time,
+                    metadata={
+                        "error": error,
+                        "lifecycle_state": self.lifecycle.state.name
+                    }
+                )
+
+        return wrapper
+
+    def register_services(self):
+        """
+        Child modules should override this.
+        Must return dict of services.
+        """
+        return {}
+
+    def get_wrapped_services(self):
+        """
+        Return auto-wrapped services.
+        """
+        services = self.register_services()
+        wrapped = {}
+
+        for name, func in services.items():
+            wrapped[name] = self.wrap_service(func)
+
+        return wrapped

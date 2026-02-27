@@ -1,31 +1,40 @@
+from typing import Any
+
 from .module import ForgeModule
 from .schema import ForgeModuleSchema
 from .lifecycle import ModuleState
-from .registry import ModuleRegistry
+from .registry.service import ModuleRegistry
 from .dependency import DependencyGraph
 from .builder.django import DjangoBuilder
 from .repair import RepairEngine
+from .execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 
 
 class ForgeEngine:
 
-    def __init__(self):
-        self.registry = ModuleRegistry()
+    def __init__(self, org_id: str = "default_org"):
+        self.org_id = org_id
+        self.registry = ModuleRegistry(org_id=self.org_id)
         self.dependency_graph = DependencyGraph()
         self.builder = DjangoBuilder()
-        self.repair_engine = RepairEngine()   # ✅ 一定要在 __init__ 裡面
+        self.repair_engine = RepairEngine()
+
+        # Runtime in-memory module cache
+        self._runtime_modules = {}
+
+    # ----------------------------
+    # Build Phase
+    # ----------------------------
 
     def build_module(self, schema_data: dict) -> ForgeModule:
         schema = ForgeModuleSchema(**schema_data)
         module = ForgeModule(schema)
 
-        # 🔥 Generate + Repair Hook
         try:
             module.generate()
         except Exception as e:
             module.lifecycle.transition(ModuleState.FAILED)
-
             try:
                 module = self.repair_engine.repair(module, e)
             except Exception:
@@ -35,31 +44,85 @@ class ForgeEngine:
             raise Exception("Module generation failed after repair")
 
         module.validate()
-
-        # 🔥 Builder 執行
         self.builder.build(module)
 
-        # 🔥 依賴圖
         self.dependency_graph.add_module(
             module.schema.name,
             module.schema.dependencies
         )
-
         self.dependency_graph.validate()
 
         module.deploy()
+
+        # Persist
         self.registry.register(module)
 
-        # 🔥 存進 DB
         ForgeModuleRecord.objects.update_or_create(
             name=module.schema.name,
             defaults={"state": module.lifecycle.get_state().value}
         )
 
+        # Cache for runtime execution
+        self._runtime_modules[module.schema.name] = module
+
         return module
+
+    # ----------------------------
+    # Activation Layer
+    # ----------------------------
+
+    def activate_module(self, module_name: str):
+        self.registry.activate(module_name)
+
+    def deactivate_module(self, module_name: str):
+        self.registry.deactivate(module_name)
+
+    def get_active_modules(self):
+        return self.registry.get_active_modules()
 
     def list_modules(self):
         return self.registry.list_modules()
 
     def get_dependency_graph(self):
         return self.dependency_graph.get_graph()
+
+    # ----------------------------
+    # Execution Kernel (B+)
+    # ----------------------------
+
+    def execute(self, service_name: str, context: ExecutionContext) -> Any:
+        """
+        Deterministic service routing.
+        Agent layer can wrap this in the future.
+        """
+
+        active_records = self.registry.get_active_modules()
+
+        candidate_modules = []
+
+        for record in active_records:
+            module = self._runtime_modules.get(record.name)
+            if not module:
+                continue
+
+            services = module.get_wrapped_services()
+
+            if service_name in services:
+                candidate_modules.append((module, services[service_name]))
+
+        if not candidate_modules:
+            raise Exception(f"No active module provides service '{service_name}'")
+
+        # Strategy selection (future extendable)
+        if context.strategy == "first":
+            selected_module, selected_service = candidate_modules[0]
+        else:
+            selected_module, selected_service = candidate_modules[0]
+
+        # Execute
+        result = selected_service(
+            org_id=context.org_id,
+            **context.payload
+        )
+
+        return result

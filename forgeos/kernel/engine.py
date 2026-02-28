@@ -62,7 +62,6 @@ class ForgeEngine:
 
         module.deploy()
 
-        # Persist
         self.registry.register(module)
 
         ForgeModuleRecord.objects.update_or_create(
@@ -70,7 +69,6 @@ class ForgeEngine:
             defaults={"state": module.lifecycle.get_state().value}
         )
 
-        # Cache for runtime execution
         self._runtime_modules[module.schema.name] = module
 
         return module
@@ -95,7 +93,7 @@ class ForgeEngine:
         return self.dependency_graph.get_graph()
 
     # ----------------------------
-    # Execution Kernel (v2.4)
+    # Execution Kernel (v2.4 Stable)
     # ----------------------------
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
@@ -156,7 +154,10 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_retry",
                         execution_time=execution_time,
-                        metadata={"attempt": attempt, "reason": "timeout"}
+                        metadata={
+                            "attempt": attempt,
+                            "reason": "timeout"
+                        }
                     )
                 else:
                     record_event(
@@ -164,7 +165,10 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_failure",
                         execution_time=execution_time,
-                        metadata={"attempt": attempt, "reason": "timeout"}
+                        metadata={
+                            "attempt": attempt,
+                            "reason": "timeout"
+                        }
                     )
 
             except Exception as e:
@@ -177,7 +181,10 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_retry",
                         execution_time=execution_time,
-                        metadata={"attempt": attempt, "error": str(e)}
+                        metadata={
+                            "attempt": attempt,
+                            "error": str(e)
+                        }
                     )
                 else:
                     record_event(
@@ -185,13 +192,20 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_failure",
                         execution_time=execution_time,
-                        metadata={"attempt": attempt, "error": str(e)}
+                        metadata={
+                            "attempt": attempt,
+                            "error": str(e)
+                        }
                     )
 
             finally:
                 signal.alarm(0)
 
+            # -------- Exponential Backoff --------
             if attempt < max_attempts and context.retry_delay > 0:
-                time.sleep(context.retry_delay)
+                delay = context.retry_delay * (
+                    context.backoff_multiplier ** (attempt - 1)
+                )
+                time.sleep(delay)
 
         raise last_exception

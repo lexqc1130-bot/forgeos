@@ -10,6 +10,14 @@ from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 import time
 from forgeos.governance.cost_tracker import record_event
+import signal
+
+class ServiceTimeout(Exception):
+    pass
+
+
+def _timeout_handler(signum, frame):
+    raise ServiceTimeout("Service execution timed out")
 
 class ForgeEngine:
 
@@ -109,6 +117,9 @@ class ForgeEngine:
 
         start_time = time.time()
 
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(5)
+
         try:
             result = selected_service(
                 org_id=context.org_id,
@@ -126,6 +137,18 @@ class ForgeEngine:
 
             return result
 
+        except ServiceTimeout:
+            execution_time = time.time() - start_time
+
+            record_event(
+                org_id=context.org_id,
+                module_name=selected_module.schema.name,
+                event_type="execution_timeout",
+                execution_time=execution_time,
+            )
+
+            raise
+
         except Exception as e:
             execution_time = time.time() - start_time
 
@@ -138,3 +161,6 @@ class ForgeEngine:
             )
 
             raise
+
+        finally:
+            signal.alarm(0)

@@ -1,4 +1,6 @@
 from typing import Any
+import time
+import signal
 
 from .module import ForgeModule
 from .schema import ForgeModuleSchema
@@ -8,9 +10,8 @@ from .dependency import DependencyGraph
 from forgeos.governance.repair import RepairEngine
 from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
-import time
 from forgeos.governance.cost_tracker import record_event
-import signal
+
 
 class ServiceTimeout(Exception):
     pass
@@ -18,6 +19,7 @@ class ServiceTimeout(Exception):
 
 def _timeout_handler(signum, frame):
     raise ServiceTimeout("Service execution timed out")
+
 
 class ForgeEngine:
 
@@ -93,7 +95,7 @@ class ForgeEngine:
         return self.dependency_graph.get_graph()
 
     # ----------------------------
-    # Execution Kernel
+    # Execution Kernel (v2.4)
     # ----------------------------
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
@@ -115,52 +117,81 @@ class ForgeEngine:
 
         selected_module, selected_service = candidate_modules[0]
 
-        start_time = time.time()
+        max_attempts = context.retry_count + 1
+        attempt = 0
+        last_exception = None
 
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(5)
+        while attempt < max_attempts:
+            attempt += 1
+            start_time = time.time()
 
-        try:
-            result = selected_service(
-                org_id=context.org_id,
-                **context.payload
-            )
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(5)
 
-            execution_time = time.time() - start_time
+            try:
+                result = selected_service(
+                    org_id=context.org_id,
+                    **context.payload
+                )
 
-            record_event(
-                org_id=context.org_id,
-                module_name=selected_module.schema.name,
-                event_type="execution_success",
-                execution_time=execution_time,
-            )
+                execution_time = time.time() - start_time
 
-            return result
+                record_event(
+                    org_id=context.org_id,
+                    module_name=selected_module.schema.name,
+                    event_type="execution_success",
+                    execution_time=execution_time,
+                    metadata={"attempt": attempt}
+                )
 
-        except ServiceTimeout:
-            execution_time = time.time() - start_time
+                return result
 
-            record_event(
-                org_id=context.org_id,
-                module_name=selected_module.schema.name,
-                event_type="execution_timeout",
-                execution_time=execution_time,
-            )
+            except ServiceTimeout as e:
+                last_exception = e
+                execution_time = time.time() - start_time
 
-            raise
+                if attempt < max_attempts:
+                    record_event(
+                        org_id=context.org_id,
+                        module_name=selected_module.schema.name,
+                        event_type="execution_retry",
+                        execution_time=execution_time,
+                        metadata={"attempt": attempt, "reason": "timeout"}
+                    )
+                else:
+                    record_event(
+                        org_id=context.org_id,
+                        module_name=selected_module.schema.name,
+                        event_type="execution_failure",
+                        execution_time=execution_time,
+                        metadata={"attempt": attempt, "reason": "timeout"}
+                    )
 
-        except Exception as e:
-            execution_time = time.time() - start_time
+            except Exception as e:
+                last_exception = e
+                execution_time = time.time() - start_time
 
-            record_event(
-                org_id=context.org_id,
-                module_name=selected_module.schema.name,
-                event_type="execution_failure",
-                execution_time=execution_time,
-                metadata={"error": str(e)}
-            )
+                if attempt < max_attempts:
+                    record_event(
+                        org_id=context.org_id,
+                        module_name=selected_module.schema.name,
+                        event_type="execution_retry",
+                        execution_time=execution_time,
+                        metadata={"attempt": attempt, "error": str(e)}
+                    )
+                else:
+                    record_event(
+                        org_id=context.org_id,
+                        module_name=selected_module.schema.name,
+                        event_type="execution_failure",
+                        execution_time=execution_time,
+                        metadata={"attempt": attempt, "error": str(e)}
+                    )
 
-            raise
+            finally:
+                signal.alarm(0)
 
-        finally:
-            signal.alarm(0)
+            if attempt < max_attempts and context.retry_delay > 0:
+                time.sleep(context.retry_delay)
+
+        raise last_exception

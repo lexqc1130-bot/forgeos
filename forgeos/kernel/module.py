@@ -3,6 +3,11 @@ from .schema import ForgeModuleSchema
 import time
 from functools import wraps
 from forgeos.governance.cost_tracker import record_event
+from forgeos.governance.models import (
+    Organization,
+    GenerationRecord,
+    TokenUsage
+)
 from forgeos.ai.llm_provider import get_llm_provider
 import ast
 
@@ -13,19 +18,19 @@ class ForgeModule:
         self.schema = schema
         self.lifecycle = ModuleLifecycle()
 
-        # 🔥 Retry 控制
+        # Retry 控制
         self.retry_count = 0
         self.max_retries = 2
         self.repair_log = []
 
-        # 🔥 Generation Loop 控制
+        # Generation Loop 控制
         self.generation_attempts = 0
         self.total_tokens_used = 0
         self.max_generation_iterations = 3
         self.generation_log = []
 
     # =====================================================
-    # 🔐 安全安裝服務
+    # 安全安裝服務
     # =====================================================
     def install_services(self, code: str):
 
@@ -46,7 +51,6 @@ class ForgeModule:
         }
 
         namespace = {}
-
         exec(code, safe_globals, namespace)
 
         if "run" not in namespace:
@@ -57,11 +61,10 @@ class ForgeModule:
         }
 
     # =====================================================
-    # 🔁 Generation Loop（自動驗證 + 修復）
+    # Generation Loop（自動驗證 + 修復）
     # =====================================================
     def generate(self):
 
-        # 每次 generate 重置狀態
         self.generation_attempts = 0
         self.total_tokens_used = 0
         self.generation_log = []
@@ -75,7 +78,7 @@ class ForgeModule:
 
             self.generation_attempts += 1
 
-            # --- 產生或修復 ---
+            # 產生或修復
             if last_error:
                 result = llm.repair_code(
                     previous_code=code,
@@ -84,7 +87,7 @@ class ForgeModule:
             else:
                 result = llm.generate_code(self.schema.name)
 
-            # --- 支援回傳 1 或 2 個值 ---
+            # 支援回傳 (code, tokens)
             if isinstance(result, tuple):
                 raw_code, tokens = result
             else:
@@ -92,8 +95,6 @@ class ForgeModule:
                 tokens = 0
 
             self.total_tokens_used += tokens
-
-            # 🔥 清理 markdown code block
             code = self.clean_code(raw_code)
 
             try:
@@ -107,6 +108,37 @@ class ForgeModule:
                     "raw_output": raw_code,
                     "clean_code": code
                 })
+
+                # ===============================
+                # Governance: quota + records
+                # ===============================
+
+                # 🔥 目前先固定 default_org
+                # 下一步會改成 org-aware engine
+                org = Organization.objects.get(org_id="default_org")
+
+                # quota 檢查
+                if org.current_month_tokens + self.total_tokens_used > org.monthly_token_quota:
+                    raise Exception("Token quota exceeded")
+
+                # 更新 token 使用量
+                org.current_month_tokens += self.total_tokens_used
+                org.save()
+
+                # 建立 GenerationRecord
+                GenerationRecord.objects.create(
+                    organization=org,
+                    module_name=self.schema.name,
+                    attempts=self.generation_attempts,
+                    total_tokens=self.total_tokens_used
+                )
+
+                # 建立 TokenUsage
+                TokenUsage.objects.create(
+                    organization=org,
+                    source="generation",
+                    tokens_used=self.total_tokens_used
+                )
 
                 return
 
@@ -128,7 +160,7 @@ class ForgeModule:
         )
 
     # =====================================================
-    # 🔍 AST 靜態驗證
+    # AST 靜態驗證
     # =====================================================
     def validate_code_structure(self, code: str):
 
@@ -141,23 +173,18 @@ class ForgeModule:
 
         for node in ast.walk(tree):
 
-            # ❌ 禁止 import
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 raise Exception("Import statements are not allowed")
 
-            # ❌ 禁止 class
             if isinstance(node, ast.ClassDef):
                 raise Exception("Class definitions are not allowed")
 
-            # ❌ 禁止 lambda
             if isinstance(node, ast.Lambda):
                 raise Exception("Lambda expressions are not allowed")
 
-            # ❌ 禁止 global
             if isinstance(node, ast.Global):
                 raise Exception("Global statements are not allowed")
 
-            # ❌ 禁止 exec / eval / __import__
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
                     if node.func.id in ["exec", "eval", "__import__"]:
@@ -173,22 +200,18 @@ class ForgeModule:
             raise Exception("Function name must be 'run'")
 
     # =====================================================
-    # 🧹 清理 Markdown Code Block
+    # 清理 Markdown Code Block
     # =====================================================
     def clean_code(self, code: str) -> str:
 
         code = code.strip()
 
-        # 如果包含 markdown block
         if code.startswith("```"):
             lines = code.splitlines()
 
-            # 移除第一行 ```python 或 ```
-            first_line = lines[0].strip()
-            if first_line.startswith("```"):
+            if lines[0].strip().startswith("```"):
                 lines = lines[1:]
 
-            # 移除最後一行 ```
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
 

@@ -11,7 +11,7 @@ from forgeos.governance.repair import RepairEngine
 from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 from forgeos.governance.cost_tracker import record_event
-
+from forgeos.runtime.sandbox import SandboxExecutor, SandboxTimeoutError, SandboxExecutionError
 
 class ServiceTimeout(Exception):
     pass
@@ -31,6 +31,7 @@ class ForgeEngine:
 
         # Runtime in-memory module cache
         self._runtime_modules = {}
+        self.sandbox = SandboxExecutor(timeout=2)
 
     # ----------------------------
     # Build Phase
@@ -129,9 +130,9 @@ class ForgeEngine:
             signal.alarm(5)
 
             try:
-                result = selected_service(
-                    org_id=context.org_id,
-                    **context.payload
+                result = self.sandbox.run(
+                    selected_service,
+                    {"org_id": context.org_id, **context.payload}
                 )
 
                 execution_time = time.time() - start_time

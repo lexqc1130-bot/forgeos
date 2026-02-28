@@ -8,7 +8,8 @@ from .dependency import DependencyGraph
 from forgeos.governance.repair import RepairEngine
 from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
-
+import time
+from forgeos.governance.cost_tracker import record_event
 
 class ForgeEngine:
 
@@ -89,7 +90,6 @@ class ForgeEngine:
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
         active_records = self.registry.get_active_modules()
-
         candidate_modules = []
 
         for record in active_records:
@@ -105,12 +105,36 @@ class ForgeEngine:
         if not candidate_modules:
             raise Exception(f"No active module provides service '{service_name}'")
 
-        # Future strategy layer
         selected_module, selected_service = candidate_modules[0]
 
-        result = selected_service(
-            org_id=context.org_id,
-            **context.payload
-        )
+        start_time = time.time()
 
-        return result
+        try:
+            result = selected_service(
+                org_id=context.org_id,
+                **context.payload
+            )
+
+            execution_time = time.time() - start_time
+
+            record_event(
+                org_id=context.org_id,
+                module_name=selected_module.schema.name,
+                event_type="execution_success",
+                execution_time=execution_time,
+            )
+
+            return result
+
+        except Exception as e:
+            execution_time = time.time() - start_time
+
+            record_event(
+                org_id=context.org_id,
+                module_name=selected_module.schema.name,
+                event_type="execution_failure",
+                execution_time=execution_time,
+                metadata={"error": str(e)}
+            )
+
+            raise

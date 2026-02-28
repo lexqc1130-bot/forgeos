@@ -1,18 +1,15 @@
-from forgeos.governance.models import CostEvent
+from .models import CostEvent
 
 
 def record_event(
     org_id: str,
     module_name: str,
     event_type: str,
-    token_used: int = 0,
     execution_time: float = 0,
+    token_used: int = 0,
     metadata: dict = None,
+    cost_amount: float = 0,
 ):
-    """
-    Centralized cost tracking entry.
-    """
-
     if metadata is None:
         metadata = {}
 
@@ -20,7 +17,8 @@ def record_event(
         org_id=org_id,
         module_name=module_name,
         event_type=event_type,
-        token_used=token_used,
         execution_time=execution_time,
+        token_used=token_used,
+        cost_amount=cost_amount,
         metadata=metadata,
     )

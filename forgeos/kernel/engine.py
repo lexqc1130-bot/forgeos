@@ -93,7 +93,7 @@ class ForgeEngine:
         return self.dependency_graph.get_graph()
 
     # ----------------------------
-    # Execution Kernel (v2.4 Stable)
+    # Execution Kernel (v2.5)
     # ----------------------------
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
@@ -115,6 +115,8 @@ class ForgeEngine:
 
         selected_module, selected_service = candidate_modules[0]
 
+        RATE_PER_SECOND = 0.01  # 商業定價模型
+
         max_attempts = context.retry_count + 1
         attempt = 0
         last_exception = None
@@ -133,13 +135,15 @@ class ForgeEngine:
                 )
 
                 execution_time = time.time() - start_time
+                cost_amount = execution_time * RATE_PER_SECOND
 
                 record_event(
                     org_id=context.org_id,
                     module_name=selected_module.schema.name,
                     event_type="execution_success",
                     execution_time=execution_time,
-                    metadata={"attempt": attempt}
+                    metadata={"attempt": attempt},
+                    cost_amount=cost_amount
                 )
 
                 return result
@@ -147,6 +151,7 @@ class ForgeEngine:
             except ServiceTimeout as e:
                 last_exception = e
                 execution_time = time.time() - start_time
+                cost_amount = execution_time * RATE_PER_SECOND
 
                 if attempt < max_attempts:
                     record_event(
@@ -154,10 +159,8 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_retry",
                         execution_time=execution_time,
-                        metadata={
-                            "attempt": attempt,
-                            "reason": "timeout"
-                        }
+                        metadata={"attempt": attempt, "reason": "timeout"},
+                        cost_amount=cost_amount
                     )
                 else:
                     record_event(
@@ -165,15 +168,14 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_failure",
                         execution_time=execution_time,
-                        metadata={
-                            "attempt": attempt,
-                            "reason": "timeout"
-                        }
+                        metadata={"attempt": attempt, "reason": "timeout"},
+                        cost_amount=cost_amount
                     )
 
             except Exception as e:
                 last_exception = e
                 execution_time = time.time() - start_time
+                cost_amount = execution_time * RATE_PER_SECOND
 
                 if attempt < max_attempts:
                     record_event(
@@ -181,10 +183,8 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_retry",
                         execution_time=execution_time,
-                        metadata={
-                            "attempt": attempt,
-                            "error": str(e)
-                        }
+                        metadata={"attempt": attempt, "error": str(e)},
+                        cost_amount=cost_amount
                     )
                 else:
                     record_event(
@@ -192,20 +192,15 @@ class ForgeEngine:
                         module_name=selected_module.schema.name,
                         event_type="execution_failure",
                         execution_time=execution_time,
-                        metadata={
-                            "attempt": attempt,
-                            "error": str(e)
-                        }
+                        metadata={"attempt": attempt, "error": str(e)},
+                        cost_amount=cost_amount
                     )
 
             finally:
                 signal.alarm(0)
 
-            # -------- Exponential Backoff --------
             if attempt < max_attempts and context.retry_delay > 0:
-                delay = context.retry_delay * (
-                    context.backoff_multiplier ** (attempt - 1)
-                )
+                delay = context.retry_delay * (context.backoff_multiplier ** (attempt - 1))
                 time.sleep(delay)
 
         raise last_exception

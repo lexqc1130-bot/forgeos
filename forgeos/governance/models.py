@@ -9,6 +9,7 @@ class CostEvent(models.Model):
 
     token_used = models.IntegerField(default=0)
     execution_time = models.FloatField(default=0)
+    cost_amount = models.FloatField(default=0)
 
     metadata = models.JSONField(default=dict, blank=True)
 

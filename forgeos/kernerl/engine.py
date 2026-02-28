@@ -3,11 +3,10 @@ from typing import Any
 from .module import ForgeModule
 from .schema import ForgeModuleSchema
 from .lifecycle import ModuleState
-from .registry.service import ModuleRegistry
+from forgeos.registry.service import ModuleRegistry
 from .dependency import DependencyGraph
-from .builder.django import DjangoBuilder
-from .repair import RepairEngine
-from .execution_context import ExecutionContext
+from forgeos.governance.repair import RepairEngine
+from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 
 
@@ -17,7 +16,6 @@ class ForgeEngine:
         self.org_id = org_id
         self.registry = ModuleRegistry(org_id=self.org_id)
         self.dependency_graph = DependencyGraph()
-        self.builder = DjangoBuilder()
         self.repair_engine = RepairEngine()
 
         # Runtime in-memory module cache
@@ -44,7 +42,6 @@ class ForgeEngine:
             raise Exception("Module generation failed after repair")
 
         module.validate()
-        self.builder.build(module)
 
         self.dependency_graph.add_module(
             module.schema.name,
@@ -87,15 +84,10 @@ class ForgeEngine:
         return self.dependency_graph.get_graph()
 
     # ----------------------------
-    # Execution Kernel (B+)
+    # Execution Kernel
     # ----------------------------
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
-        """
-        Deterministic service routing.
-        Agent layer can wrap this in the future.
-        """
-
         active_records = self.registry.get_active_modules()
 
         candidate_modules = []
@@ -113,13 +105,9 @@ class ForgeEngine:
         if not candidate_modules:
             raise Exception(f"No active module provides service '{service_name}'")
 
-        # Strategy selection (future extendable)
-        if context.strategy == "first":
-            selected_module, selected_service = candidate_modules[0]
-        else:
-            selected_module, selected_service = candidate_modules[0]
+        # Future strategy layer
+        selected_module, selected_service = candidate_modules[0]
 
-        # Execute
         result = selected_service(
             org_id=context.org_id,
             **context.payload

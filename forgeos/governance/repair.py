@@ -1,6 +1,6 @@
 from .error_classifier import ErrorClassifier
-from .context_enhancer import ContextEnhancer
-from .lifecycle import ModuleState
+from ..runtime.context_enhancer import ContextEnhancer
+from ..kernerl.lifecycle import ModuleState
 
 
 class RepairStrategy:

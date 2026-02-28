@@ -2,7 +2,7 @@ from .lifecycle import ModuleLifecycle, ModuleState
 from .schema import ForgeModuleSchema
 import time
 from functools import wraps
-from forgeos.cost_tracker import record_event
+from forgeos.governance.cost_tracker import record_event
 
 class ForgeModule:
 

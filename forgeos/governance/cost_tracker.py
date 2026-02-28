@@ -1,4 +1,4 @@
-from forgeos.models import CostEvent
+from forgeos.kernerl.models import CostEvent
 
 
 def record_event(

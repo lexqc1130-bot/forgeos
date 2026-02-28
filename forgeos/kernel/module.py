@@ -16,17 +16,28 @@ class ForgeModule:
         self.repair_log = []
 
     def generate(self):
-        # 🔥 故意製造錯誤來測試 Repair Pipeline
-        raise Exception("SyntaxError: invalid syntax")
-        try:
-            self.schema.validate()
+        """
+        Simulated AI generation (MVP).
+        """
 
-            # ⚠️ 這裡先保留正常版本
-            self.lifecycle.transition(ModuleState.GENERATED)
+        if "square" in self.schema.name:
 
-        except Exception as e:
-            self.lifecycle.transition(ModuleState.FAILED)
-            raise e
+            code = """def square(org_id: str, number: int, **kwargs):
+        return number * number
+    """
+
+            namespace = {}
+            exec(code, namespace)
+
+            self.services = {
+                "square": namespace["square"]
+            }
+
+        else:
+            def default_service(org_id: str, **kwargs):
+                return "default response"
+
+            self.services = {"default": default_service}
 
     def validate(self):
         self.lifecycle.transition(ModuleState.VALIDATED)
@@ -90,7 +101,7 @@ class ForgeModule:
         """
         Return auto-wrapped services.
         """
-        services = self.register_services()
+        services = getattr(self, "services", {})
         wrapped = {}
 
         for name, func in services.items():

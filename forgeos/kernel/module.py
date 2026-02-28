@@ -3,6 +3,7 @@ from .schema import ForgeModuleSchema
 import time
 from functools import wraps
 from forgeos.governance.cost_tracker import record_event
+from forgeos.ai.llm_provider import get_llm_provider
 
 class ForgeModule:
 
@@ -16,28 +17,31 @@ class ForgeModule:
         self.repair_log = []
 
     def generate(self):
-        """
-        Simulated AI generation (MVP).
-        """
 
-        if "square" in self.schema.name:
+        llm = get_llm_provider()
+        raw_code = llm.generate_code(self.schema.name)
 
-            code = """def square(org_id: str, number: int, **kwargs):
-        return number * number
-    """
+        code = raw_code.strip()
 
-            namespace = {}
-            exec(code, namespace)
+        # 🔥 移除 markdown code block
+        if code.startswith("```"):
+            code = code.replace("```python", "")
+            code = code.replace("```", "")
+            code = code.strip()
 
-            self.services = {
-                "square": namespace["square"]
-            }
+        namespace = {}
 
-        else:
-            def default_service(org_id: str, **kwargs):
-                return "default response"
+        try:
+            exec(code, {}, namespace)
+        except Exception as e:
+            raise Exception(f"Code execution failed: {str(e)}")
 
-            self.services = {"default": default_service}
+        if "run" not in namespace:
+            raise Exception("Generated code must define function 'run'")
+
+        self.services = {
+            "run": namespace["run"]
+        }
 
     def validate(self):
         self.lifecycle.transition(ModuleState.VALIDATED)

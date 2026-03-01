@@ -11,7 +11,9 @@ from forgeos.governance.repair import RepairEngine
 from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 from forgeos.governance.cost_tracker import record_event
-from forgeos.runtime.sandbox import SandboxExecutor, SandboxTimeoutError, SandboxExecutionError
+from forgeos.runtime.sandbox import SandboxExecutor
+from forgeos.governance.models import Organization
+
 
 class ServiceTimeout(Exception):
     pass
@@ -23,13 +25,18 @@ def _timeout_handler(signum, frame):
 
 class ForgeEngine:
 
-    def __init__(self, org_id: str = "default_org"):
-        self.org_id = org_id
+    def __init__(self, org_id: str):
+
+        if not org_id:
+            raise ValueError("org_id is required")
+
+        self.organization = Organization.objects.get(org_id=org_id)
+        self.org_id = self.organization.org_id
+
         self.registry = ModuleRegistry(org_id=self.org_id)
         self.dependency_graph = DependencyGraph()
         self.repair_engine = RepairEngine()
 
-        # Runtime in-memory module cache
         self._runtime_modules = {}
         self.sandbox = SandboxExecutor(timeout=2)
 
@@ -38,13 +45,18 @@ class ForgeEngine:
     # ----------------------------
 
     def build_module(self, schema_data: dict) -> ForgeModule:
+
         schema = ForgeModuleSchema(**schema_data)
         module = ForgeModule(schema)
 
+        module.organization = self.organization
+
         try:
             module.generate()
+
         except Exception as e:
             module.lifecycle.transition(ModuleState.FAILED)
+
             try:
                 module = self.repair_engine.repair(module, e)
             except Exception:
@@ -94,10 +106,15 @@ class ForgeEngine:
         return self.dependency_graph.get_graph()
 
     # ----------------------------
-    # Execution Kernel (v2.5)
+    # Execution Kernel (Quota Enabled)
     # ----------------------------
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
+
+        # 🔥 Quota Enforcement（執行前檢查）
+        if self.organization.current_month_tokens >= self.organization.monthly_token_quota:
+            raise Exception("Monthly token quota exceeded")
+
         active_records = self.registry.get_active_modules()
         candidate_modules = []
 
@@ -116,13 +133,14 @@ class ForgeEngine:
 
         selected_module, selected_service = candidate_modules[0]
 
-        RATE_PER_SECOND = 0.01  # 商業定價模型
+        RATE_PER_SECOND = 0.01  # 定價模型
 
         max_attempts = context.retry_count + 1
         attempt = 0
         last_exception = None
 
         while attempt < max_attempts:
+
             attempt += 1
             start_time = time.time()
 
@@ -130,78 +148,93 @@ class ForgeEngine:
             signal.alarm(5)
 
             try:
+
+                payload = {"org_id": self.org_id, **context.payload}
+
                 result = self.sandbox.run(
                     selected_service,
-                    {"org_id": context.org_id, **context.payload}
+                    payload
                 )
 
                 execution_time = time.time() - start_time
                 cost_amount = execution_time * RATE_PER_SECOND
 
+                # 🔥 計算 token（簡化模型）
+                tokens_used = max(1, int(cost_amount * 100))
+
+                # 🔥 更新 tenant token 使用量
+                self.organization.current_month_tokens += tokens_used
+                self.organization.save()
+
                 record_event(
-                    org_id=context.org_id,
+                    org_id=self.org_id,
                     module_name=selected_module.schema.name,
                     event_type="execution_success",
                     execution_time=execution_time,
-                    metadata={"attempt": attempt},
+                    metadata={
+                        "attempt": attempt,
+                        "tokens_used": tokens_used
+                    },
                     cost_amount=cost_amount
                 )
 
                 return result
 
             except ServiceTimeout as e:
+
                 last_exception = e
                 execution_time = time.time() - start_time
                 cost_amount = execution_time * RATE_PER_SECOND
 
-                if attempt < max_attempts:
-                    record_event(
-                        org_id=context.org_id,
-                        module_name=selected_module.schema.name,
-                        event_type="execution_retry",
-                        execution_time=execution_time,
-                        metadata={"attempt": attempt, "reason": "timeout"},
-                        cost_amount=cost_amount
-                    )
-                else:
-                    record_event(
-                        org_id=context.org_id,
-                        module_name=selected_module.schema.name,
-                        event_type="execution_failure",
-                        execution_time=execution_time,
-                        metadata={"attempt": attempt, "reason": "timeout"},
-                        cost_amount=cost_amount
-                    )
+                event_type = (
+                    "execution_retry"
+                    if attempt < max_attempts
+                    else "execution_failure"
+                )
+
+                record_event(
+                    org_id=self.org_id,
+                    module_name=selected_module.schema.name,
+                    event_type=event_type,
+                    execution_time=execution_time,
+                    metadata={
+                        "attempt": attempt,
+                        "reason": "timeout"
+                    },
+                    cost_amount=cost_amount
+                )
 
             except Exception as e:
+
                 last_exception = e
                 execution_time = time.time() - start_time
                 cost_amount = execution_time * RATE_PER_SECOND
 
-                if attempt < max_attempts:
-                    record_event(
-                        org_id=context.org_id,
-                        module_name=selected_module.schema.name,
-                        event_type="execution_retry",
-                        execution_time=execution_time,
-                        metadata={"attempt": attempt, "error": str(e)},
-                        cost_amount=cost_amount
-                    )
-                else:
-                    record_event(
-                        org_id=context.org_id,
-                        module_name=selected_module.schema.name,
-                        event_type="execution_failure",
-                        execution_time=execution_time,
-                        metadata={"attempt": attempt, "error": str(e)},
-                        cost_amount=cost_amount
-                    )
+                event_type = (
+                    "execution_retry"
+                    if attempt < max_attempts
+                    else "execution_failure"
+                )
+
+                record_event(
+                    org_id=self.org_id,
+                    module_name=selected_module.schema.name,
+                    event_type=event_type,
+                    execution_time=execution_time,
+                    metadata={
+                        "attempt": attempt,
+                        "error": str(e)
+                    },
+                    cost_amount=cost_amount
+                )
 
             finally:
                 signal.alarm(0)
 
             if attempt < max_attempts and context.retry_delay > 0:
-                delay = context.retry_delay * (context.backoff_multiplier ** (attempt - 1))
+                delay = context.retry_delay * (
+                    context.backoff_multiplier ** (attempt - 1)
+                )
                 time.sleep(delay)
 
         raise last_exception

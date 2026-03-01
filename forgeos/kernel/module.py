@@ -112,10 +112,7 @@ class ForgeModule:
                 # ===============================
                 # Governance: quota + records
                 # ===============================
-
-                # 🔥 目前先固定 default_org
-                # 下一步會改成 org-aware engine
-                org = Organization.objects.get(org_id="default_org")
+                org = self.organization
 
                 # quota 檢查
                 if org.current_month_tokens + self.total_tokens_used > org.monthly_token_quota:

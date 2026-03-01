@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from forgeos.kernel.engine import ForgeEngine
 
-engine = ForgeEngine()
+engine = ForgeEngine(org_id="default_org")
 
 
 def test_forgeos(request):

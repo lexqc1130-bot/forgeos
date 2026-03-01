@@ -1,10 +1,9 @@
 from django.http import JsonResponse
 from forgeos.kernel.engine import ForgeEngine
 
-engine = ForgeEngine(org_id="default_org")
-
 
 def test_forgeos(request):
+    engine = ForgeEngine(org_id="default_org")
 
     schema_data = {
         "name": "dashboard",
@@ -18,7 +17,18 @@ def test_forgeos(request):
 
     module = engine.build_module(schema_data)
 
+    modules = engine.list_modules()
+
+    # 🔥 把 QuerySet 轉成 list
+    module_list = [
+        {
+            "name": m.name,
+            "state": m.state
+        }
+        for m in modules
+    ]
+
     return JsonResponse({
         "built_module": module.schema.name,
-        "all_modules": engine.list_modules()
+        "all_modules": module_list
     })

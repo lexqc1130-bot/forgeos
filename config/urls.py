@@ -16,8 +16,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.shortcuts import redirect
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("", include("core.urls")),
+    path("forge-console/", include("forge_console.urls")),
+    path("", lambda request: redirect("/forge-console/")),
 ]

@@ -99,7 +99,13 @@ class ForgeModule:
             code = self.clean_code(raw_code)
 
             try:
+                # 🔥 保存原始可執行 code（給 sandbox 用）
+                self.raw_code = code
+
+                # 驗證 AST
                 self.validate_code_structure(code)
+
+                # 安裝 service（給 non-sandbox fallback 用）
                 self.install_services(code)
 
                 self.generation_log.append({

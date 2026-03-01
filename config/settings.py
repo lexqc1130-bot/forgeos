@@ -40,6 +40,7 @@ INSTALLED_APPS = [
 
     'core',
     "forgeos.apps.ForgeosConfig",
+    "forge_console",
 ]
 
 MIDDLEWARE = [

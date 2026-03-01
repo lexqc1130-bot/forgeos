@@ -1,6 +1,5 @@
 from typing import Any
 import time
-import signal
 
 from django.db.models import F
 
@@ -14,15 +13,11 @@ from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 from forgeos.governance.cost_tracker import record_event
 from forgeos.runtime.sandbox import SandboxExecutor
-from forgeos.governance.models import Organization, TokenUsage  # 🔥 只新增 TokenUsage
+from forgeos.governance.models import Organization, TokenUsage
 
 
 class ServiceTimeout(Exception):
     pass
-
-
-def _timeout_handler(signum, frame):
-    raise ServiceTimeout("Service execution timed out")
 
 
 class ForgeEngine:
@@ -40,7 +35,48 @@ class ForgeEngine:
         self.repair_engine = RepairEngine()
 
         self._runtime_modules = {}
+
+        # timeout 交給 sandbox 控制
         self.sandbox = SandboxExecutor(timeout=2)
+
+        # 重建 runtime modules
+        self._rehydrate_modules()
+
+    # ----------------------------
+    # Runtime Rehydration Layer
+    # ----------------------------
+
+    def _rehydrate_modules(self):
+
+        records = self.registry.list_modules()
+
+        for record in records:
+
+            if record.name in self._runtime_modules:
+                continue
+
+            schema_data = {
+                "name": record.name,
+                "type": "web_component",
+                "inputs": [],
+                "outputs": [],
+                "dependencies": [],
+                "permissions": [],
+                "config_schema": {}
+            }
+
+            schema = ForgeModuleSchema(**schema_data)
+            module = ForgeModule(schema)
+            module.organization = self.organization
+
+            try:
+                module.generate()
+                module.validate()
+                module.deploy()
+            except Exception:
+                continue
+
+            self._runtime_modules[record.name] = module
 
     # ----------------------------
     # Build Phase
@@ -50,7 +86,6 @@ class ForgeEngine:
 
         schema = ForgeModuleSchema(**schema_data)
         module = ForgeModule(schema)
-
         module.organization = self.organization
 
         try:
@@ -76,7 +111,6 @@ class ForgeEngine:
         self.dependency_graph.validate()
 
         module.deploy()
-
         self.registry.register(module)
 
         ForgeModuleRecord.objects.update_or_create(
@@ -113,6 +147,7 @@ class ForgeEngine:
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
 
+        # 🔥 Quota 檢查
         if self.organization.current_month_tokens >= self.organization.monthly_token_quota:
             raise Exception("Monthly token quota exceeded")
 
@@ -127,12 +162,12 @@ class ForgeEngine:
             services = module.get_wrapped_services()
 
             if service_name in services:
-                candidate_modules.append((module, services[service_name]))
+                candidate_modules.append(module)
 
         if not candidate_modules:
             raise Exception(f"No active module provides service '{service_name}'")
 
-        selected_module, selected_service = candidate_modules[0]
+        selected_module = candidate_modules[0]
 
         RATE_PER_SECOND = 0.01
 
@@ -145,24 +180,22 @@ class ForgeEngine:
             attempt += 1
             start_time = time.time()
 
-            signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(5)
-
             try:
 
                 payload = {"org_id": self.org_id, **context.payload}
 
+                # 🔥 改成傳 module + service_name + payload
                 result = self.sandbox.run(
-                    selected_service,
+                    selected_module,
+                    service_name,
                     payload
                 )
 
                 execution_time = time.time() - start_time
                 cost_amount = execution_time * RATE_PER_SECOND
-
                 tokens_used = max(1, int(cost_amount * 100))
 
-                # 🔥 原子更新（保持你原本邏輯）
+                # 🔥 原子更新 token
                 Organization.objects.filter(
                     pk=self.organization.pk
                 ).update(
@@ -171,7 +204,7 @@ class ForgeEngine:
 
                 self.organization.refresh_from_db()
 
-                # 🔥 新增：Execution TokenUsage（不動既有功能）
+                # 🔥 Execution TokenUsage
                 TokenUsage.objects.create(
                     organization=self.organization,
                     source="execution",
@@ -191,30 +224,6 @@ class ForgeEngine:
                 )
 
                 return result
-
-            except ServiceTimeout as e:
-
-                last_exception = e
-                execution_time = time.time() - start_time
-                cost_amount = execution_time * RATE_PER_SECOND
-
-                event_type = (
-                    "execution_retry"
-                    if attempt < max_attempts
-                    else "execution_failure"
-                )
-
-                record_event(
-                    org_id=self.org_id,
-                    module_name=selected_module.schema.name,
-                    event_type=event_type,
-                    execution_time=execution_time,
-                    metadata={
-                        "attempt": attempt,
-                        "reason": "timeout"
-                    },
-                    cost_amount=cost_amount
-                )
 
             except Exception as e:
 
@@ -240,9 +249,7 @@ class ForgeEngine:
                     cost_amount=cost_amount
                 )
 
-            finally:
-                signal.alarm(0)
-
+            # 🔥 retry delay
             if attempt < max_attempts and context.retry_delay > 0:
                 delay = context.retry_delay * (
                     context.backoff_multiplier ** (attempt - 1)

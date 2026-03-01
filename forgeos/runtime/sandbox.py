@@ -1,28 +1,49 @@
 import multiprocessing
 import traceback
 import resource
-import os
-
 
 class SandboxExecutionError(Exception):
     pass
-
 
 class SandboxTimeoutError(Exception):
     pass
 
 
-def _worker(func, kwargs, queue):
+def _worker(raw_code, service_name, kwargs, queue):
     try:
-        # 🔥 設定最大記憶體（例如 100MB）
-        memory_limit = 100 * 1024 * 1024  # 100MB
-        resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
+        # 記憶體限制
+ #       memory_limit = 100 * 1024 * 1024
+ #       resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
-        # 🔥 設定 CPU time（秒）
-        cpu_limit = 2
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
+        # CPU 限制
+ #       cpu_limit = 2
+ #       resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
 
-        result = func(**kwargs)
+        # 在子 process 內 exec
+        namespace = {}
+        safe_globals = {
+            "__builtins__": {
+                "len": len,
+                "range": range,
+                "min": min,
+                "max": max,
+                "sum": sum,
+                "abs": abs,
+                "str": str,
+                "int": int,
+                "float": float,
+                "bool": bool,
+                "isinstance": isinstance,
+            }
+        }
+
+        exec(raw_code, safe_globals, namespace)
+
+        if service_name not in namespace:
+            raise Exception(f"Service '{service_name}' not found")
+
+        result = namespace[service_name](**kwargs)
+
         queue.put(("success", result))
 
     except Exception:
@@ -34,12 +55,16 @@ class SandboxExecutor:
     def __init__(self, timeout=2):
         self.timeout = timeout
 
-    def run(self, func, kwargs: dict):
+    def run(self, module, service_name, kwargs):
+
+        if not hasattr(module, "raw_code"):
+            raise SandboxExecutionError("Module has no raw_code")
 
         queue = multiprocessing.Queue()
+
         process = multiprocessing.Process(
             target=_worker,
-            args=(func, kwargs, queue)
+            args=(module.raw_code, service_name, kwargs, queue)
         )
 
         process.start()

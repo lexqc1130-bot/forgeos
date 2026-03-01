@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ForgeOS Agent Console</title>
+    <style>
+        body { margin: 0; font-family: Arial; background: #f4f6f8; }
+        .layout { display: flex; height: 100vh; }
+
+        .sidebar {
+            width: 260px;
+            background: #0f172a;
+            color: white;
+            padding: 20px;
+        }
+
+        .sidebar h2 { margin-top: 0; }
+        .sidebar ul { list-style: none; padding: 0; }
+
+        .sidebar li {
+            margin: 10px 0;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 4px;
+        }
+
+        .sidebar li:hover { background: #1e293b; }
+
+        .main {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .module-item {
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .state {
+            font-size: 12px;
+            padding: 3px 6px;
+            border-radius: 4px;
+            background: #e2e8f0;
+            margin-left: 8px;
+        }
+
+        button {
+            margin-left: 8px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        select, input {
+            width: 100%;
+            margin-bottom: 15px;
+            padding: 6px;
+        }
+
+        .execute-result {
+            background: #111827;
+            color: #10b981;
+            padding: 10px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="layout">
+
+    <div class="sidebar">
+        <h2>🔥 ForgeOS Agent</h2>
+
+        <select id="org-select" onchange="changeOrg()">
+            <option value="default_org">default_org</option>
+        </select>
+
+        <ul>
+            <li onclick="loadDashboard()">Dashboard</li>
+            <li onclick="loadModules()">Modules</li>
+            <li onclick="loadActive()">Active Modules</li>
+            <li onclick="loadTokens()">Token Usage</li>
+            <li onclick="loadDependencies()">Dependency Graph</li>
+        </ul>
+    </div>
+
+    <div class="main" id="main-content"></div>
+
+</div>
+
+<script>
+
+let currentOrg = "default_org";
+
+/* ---------------- ORG ---------------- */
+function changeOrg() {
+    currentOrg = document.getElementById("org-select").value;
+    loadDashboard();
+}
+
+/* ---------------- DASHBOARD ---------------- */
+function loadDashboard() {
+    document.getElementById("main-content").innerHTML = `
+        <h1>Agent Console Dashboard</h1>
+        <div class="card">
+            ForgeOS Runtime Control Plane<br>
+            Organization: <strong>${currentOrg}</strong>
+        </div>
+    `;
+}
+
+/* ---------------- MODULE LIST ---------------- */
+function loadModules() {
+
+    const main = document.getElementById("main-content");
+
+    main.innerHTML = `
+        <h1>Registered Modules</h1>
+        <div class="card">
+            <button onclick="createModule()">+ Create Module</button>
+        </div>
+        <div class="card">
+            <div id="module-list">Loading...</div>
+        </div>
+    `;
+
+    fetch(`/forge-console/api/modules/?org=${currentOrg}`)
+        .then(res => res.json())
+        .then(data => {
+
+            const container = document.getElementById("module-list");
+            container.innerHTML = "";
+
+            if (!data.modules || data.modules.length === 0) {
+                container.innerHTML = "No modules.";
+                return;
+            }
+
+            data.modules.forEach(module => {
+
+                const div = document.createElement("div");
+                div.className = "module-item";
+
+                div.innerHTML = `
+                    <strong>${module.name}</strong>
+                    <span class="state">${module.state}</span>
+                    <button onclick="activateModule('${module.name}')">Activate</button>
+                    <button onclick="deactivateModule('${module.name}')">Deactivate</button>
+                    <button onclick="openExecuteUI('${module.name}')">Execute</button>
+                `;
+
+                container.appendChild(div);
+            });
+        });
+}
+
+/* ---------------- CREATE ---------------- */
+function createModule() {
+
+    const payload = {
+        name: "module_" + Date.now(),
+        type: "web_component",
+        inputs: [],
+        outputs: [],
+        dependencies: [],
+        permissions: [],
+        config_schema: {}
+    };
+
+    fetch(`/forge-console/api/create-module/?org=${currentOrg}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+    }).then(() => loadModules());
+}
+
+/* ---------------- ACTIVATE ---------------- */
+function activateModule(name) {
+    fetch(`/forge-console/api/activate/?org=${currentOrg}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name})
+    }).then(() => loadModules());
+}
+
+/* ---------------- DEACTIVATE ---------------- */
+function deactivateModule(name) {
+    fetch(`/forge-console/api/deactivate/?org=${currentOrg}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name})
+    }).then(() => loadModules());
+}
+
+/* ---------------- EXECUTE UI ---------------- */
+function openExecuteUI(name) {
+
+    fetch(`/forge-console/api/module/${name}/signature/?org=${currentOrg}`)
+        .then(res => res.json())
+        .then(data => {
+
+            let formFields = "";
+
+            data.parameters.forEach(param => {
+                formFields += `
+                    <label>${param.name}</label>
+                    <input id="input-${param.name}" />
+                `;
+            });
+
+            document.getElementById("main-content").innerHTML = `
+                <h1>Execute ${name}</h1>
+                <div class="card">
+                    ${formFields}
+                    <button id="run-button">Run</button>
+                    <button onclick="loadModules()">Back</button>
+                    <div id="execution-result"></div>
+                </div>
+            `;
+
+            setTimeout(() => {
+                document.getElementById("run-button").onclick = function() {
+                    submitExecution(name, data.parameters);
+                };
+            }, 0);
+
+        });
+}
+
+function submitExecution(name, parameters) {
+
+    let payload = {};
+
+    parameters.forEach(param => {
+        const value = document.getElementById(`input-${param.name}`).value;
+        payload[param.name] = isNaN(value) ? value : Number(value);
+    });
+
+    fetch(`/forge-console/api/execute/?org=${currentOrg}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            name: name,
+            payload: payload
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+
+        document.getElementById("execution-result").innerHTML =
+            `<div class="execute-result">${JSON.stringify(data, null, 2)}</div>`;
+    });
+}
+
+/* ---------------- ACTIVE ---------------- */
+function loadActive() {
+
+    fetch(`/forge-console/api/modules/?org=${currentOrg}`)
+        .then(res => res.json())
+        .then(data => {
+
+            const active = data.modules.filter(m => m.state === "ACTIVE");
+
+            document.getElementById("main-content").innerHTML = `
+                <h1>Active Modules</h1>
+                <div class="card">
+                    ${active.length === 0
+                        ? "No active modules."
+                        : active.map(m => m.name).join("<br>")}
+                </div>
+            `;
+        });
+}
+
+/* ---------------- TOKEN ---------------- */
+function loadTokens() {
+
+    fetch(`/forge-console/api/token-usage/?org=${currentOrg}`)
+        .then(res => res.json())
+        .then(data => {
+
+            document.getElementById("main-content").innerHTML = `
+                <h1>Token Usage</h1>
+                <div class="card">
+                    <p>Org: ${data.org_id}</p>
+                    <p>Used: ${data.current_tokens}</p>
+                    <p>Quota: ${data.quota}</p>
+                    <p>Remaining: ${data.remaining}</p>
+                </div>
+            `;
+        });
+}
+
+/* ---------------- DEPENDENCY ---------------- */
+function loadDependencies() {
+    document.getElementById("main-content").innerHTML = `
+        <h1>Dependency Graph</h1>
+        <div class="card">
+            Graph visualization layer coming next.
+        </div>
+    `;
+}
+
+loadDashboard();
+
+</script>
+</body>
+</html>

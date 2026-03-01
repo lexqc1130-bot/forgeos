@@ -2,6 +2,8 @@ from typing import Any
 import time
 import signal
 
+from django.db.models import F
+
 from .module import ForgeModule
 from .schema import ForgeModuleSchema
 from .lifecycle import ModuleState
@@ -12,7 +14,7 @@ from forgeos.runtime.execution_context import ExecutionContext
 from core.models import ForgeModuleRecord
 from forgeos.governance.cost_tracker import record_event
 from forgeos.runtime.sandbox import SandboxExecutor
-from forgeos.governance.models import Organization
+from forgeos.governance.models import Organization, TokenUsage  # 🔥 只新增 TokenUsage
 
 
 class ServiceTimeout(Exception):
@@ -111,7 +113,6 @@ class ForgeEngine:
 
     def execute(self, service_name: str, context: ExecutionContext) -> Any:
 
-        # 🔥 Quota Enforcement（執行前檢查）
         if self.organization.current_month_tokens >= self.organization.monthly_token_quota:
             raise Exception("Monthly token quota exceeded")
 
@@ -133,7 +134,7 @@ class ForgeEngine:
 
         selected_module, selected_service = candidate_modules[0]
 
-        RATE_PER_SECOND = 0.01  # 定價模型
+        RATE_PER_SECOND = 0.01
 
         max_attempts = context.retry_count + 1
         attempt = 0
@@ -159,12 +160,23 @@ class ForgeEngine:
                 execution_time = time.time() - start_time
                 cost_amount = execution_time * RATE_PER_SECOND
 
-                # 🔥 計算 token（簡化模型）
                 tokens_used = max(1, int(cost_amount * 100))
 
-                # 🔥 更新 tenant token 使用量
-                self.organization.current_month_tokens += tokens_used
-                self.organization.save()
+                # 🔥 原子更新（保持你原本邏輯）
+                Organization.objects.filter(
+                    pk=self.organization.pk
+                ).update(
+                    current_month_tokens=F("current_month_tokens") + tokens_used
+                )
+
+                self.organization.refresh_from_db()
+
+                # 🔥 新增：Execution TokenUsage（不動既有功能）
+                TokenUsage.objects.create(
+                    organization=self.organization,
+                    source="execution",
+                    tokens_used=tokens_used
+                )
 
                 record_event(
                     org_id=self.org_id,

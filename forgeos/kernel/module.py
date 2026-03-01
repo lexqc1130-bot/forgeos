@@ -2,6 +2,7 @@ from .lifecycle import ModuleLifecycle, ModuleState
 from .schema import ForgeModuleSchema
 import time
 from functools import wraps
+from django.db.models import F
 from forgeos.governance.cost_tracker import record_event
 from forgeos.governance.models import (
     Organization,
@@ -113,14 +114,20 @@ class ForgeModule:
                 # Governance: quota + records
                 # ===============================
                 org = self.organization
+                org.refresh_from_db()
 
                 # quota 檢查
                 if org.current_month_tokens + self.total_tokens_used > org.monthly_token_quota:
                     raise Exception("Token quota exceeded")
 
-                # 更新 token 使用量
-                org.current_month_tokens += self.total_tokens_used
-                org.save()
+                # 🔥 原子化更新
+                Organization.objects.filter(
+                    pk=org.pk
+                ).update(
+                    current_month_tokens=F("current_month_tokens") + self.total_tokens_used
+                )
+
+                org.refresh_from_db()
 
                 # 建立 GenerationRecord
                 GenerationRecord.objects.create(
